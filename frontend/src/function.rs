@@ -288,6 +288,9 @@ impl Function {
 
         if general {
             let available = [
+                Register::General(RAX),
+                Register::General(RCX),
+                Register::General(RDX),
                 Register::General(R12),
                 Register::General(R13),
                 Register::General(R14),
@@ -686,6 +689,9 @@ impl Function {
         let mut fpc = 0;
         let mut pc = 0;
         let mut used_params = vec![];
+        self.sink.emit_push_reg(RAX);
+        self.sink.emit_push_reg(RCX);
+        self.sink.emit_push_reg(RDX);
         self.sink.emit_push_reg(R12);
         self.sink.emit_push_reg(R13);
         self.sink.emit_push_reg(R14);
@@ -747,6 +753,9 @@ impl Function {
         self.sink.emit_pop_reg(R14);
         self.sink.emit_pop_reg(R13);
         self.sink.emit_pop_reg(R12);
+        self.sink.emit_pop_reg(RDX);
+        self.sink.emit_pop_reg(RCX);
+        self.sink.emit_pop_reg(RAX);
         let value = Value::new(self.idx);
         self.idx += 1;
         self.values.insert(value, ret);
