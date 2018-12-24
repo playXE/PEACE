@@ -54,6 +54,8 @@ use peace_backend::sink::{get_executable_memory, Memory, Sink};
 use peace_backend::CondCode;
 use peace_backend::Membase;
 use std::collections::HashMap;
+use std::collections::HashSet;
+
 
 #[derive(Clone)]
 pub struct Function {
@@ -62,7 +64,7 @@ pub struct Function {
     /// External functions like `printf` may use VA_ARGS so we just don't use parameters
     parameters: Option<Vec<Param>>,
     sink: Sink,
-    used_regs: Vec<Register>,
+    used_regs: HashSet<Register>,
     free_regs: Vec<Register>,
     values: HashMap<Value, Kind>,
     value_kind: HashMap<Value, ValueKind>,
@@ -108,7 +110,7 @@ impl Function {
                 Register::Float(XMM13),
             ],
             fixups: Vec::new(),
-            used_regs: vec![],
+            used_regs: HashSet::new(),
             is_alive: HashMap::new(),
             localsize: 0,
             value_kind: HashMap::new(),
@@ -279,7 +281,7 @@ impl Function {
     }
 
     fn allocate_value(&mut self, v: Value) -> ValueKind {
-        let data = self.values.get(&v).unwrap();
+        let data = self.values.get(&v).expect(&format!("Not found: {:?}", v));
 
         let general = match data {
             Int64 | Int32 | Bool32 | Bool64 | Pointer => true,
@@ -301,13 +303,13 @@ impl Function {
             for register in available.iter() {
                 if !self.used_regs.contains(&register) {
                     free = Some(register);
-                    self.used_regs.push(*register);
+                    self.used_regs.insert(*register);
                     break;
                 }
             }
 
             if free.is_some() {
-                return ValueKind::Reg(free.unwrap().clone());
+                return ValueKind::Reg(free.expect("free is none").clone());
             } else {
                 let size = self.allocate(*data);
 
@@ -325,7 +327,7 @@ impl Function {
             for register in available.iter() {
                 if !self.used_regs.contains(&register) {
                     free = Some(register);
-                    self.used_regs.push(*register);
+                    self.used_regs.insert(*register);
                     break;
                 }
             }
@@ -342,24 +344,34 @@ impl Function {
 
     fn kill(&mut self, v: Value) -> bool {
         let kinds = self.value_kind.clone();
-        let vkind = kinds.get(&v).unwrap();
-        self.values.remove(&v);
-        //self.values_location.remove(&v);
-        self.value_kind.remove(&v);
-        match vkind {
-            ValueKind::Reg(r) => {
-                for (i, reg) in self.used_regs.iter().enumerate() {
-                    if reg == r {
-                        self.used_regs.remove(i);
-                        return true;
+        let vkind = kinds.get(&v);
+        
+
+        if vkind.is_some() {
+            let vkind = vkind.unwrap();
+            self.values.remove(&v);
+            //self.values_location.remove(&v);
+            self.value_kind.remove(&v);
+            match vkind {
+                ValueKind::Reg(r) => {
+                    for reg in self.used_regs.iter() {
+                        
+                        if reg == r {
+                            
+                            self.used_regs.remove(&reg.clone());
+                            return true;
+                        }
                     }
+                    
+                    return false;
                 }
-                return false;
+                ValueKind::Stack(off) => {
+                    self.localsize -= off;
+                    return true;
+                }
             }
-            ValueKind::Stack(off) => {
-                self.localsize -= off;
-                return true;
-            }
+        } else {
+            return true;
         }
     }
 
@@ -571,7 +583,7 @@ impl Function {
     pub fn iadd(&mut self, x: Value, y: Value) -> Value {
         self.load_value(x, Register::General(R10));
         self.load_value(y, Register::General(R11));
-        let data = self.values.get(&x).unwrap();
+        let data = self.values.get(&x).expect("x not found");
         let data = data.clone();
         self.sink.emit_add_reg_reg(data.x64(), R10, R11);
         let value = Value::new(self.idx);
@@ -594,6 +606,7 @@ impl Function {
         }
         self.value_kind.insert(value, kind);
         self.idx += 1;
+        
         value
     }
 
@@ -662,7 +675,7 @@ impl Function {
     }
 
     pub fn ret(&mut self, x: Value) {
-        let data = self.values.get(&x).unwrap();
+        let data = self.values.get(&x).expect("ret value not found");
         match data {
             Int32 | Int64 | Pointer | Bool32 | Bool64 => {
                 self.load_value(x, Register::General(RAX));
@@ -713,6 +726,7 @@ impl Function {
                 }
                 used_params.push(idx);
             }
+            self.kill(*value);
         }
         let mut _size = 0i32;
         for (idx, value) in args.iter().enumerate() {
@@ -738,6 +752,7 @@ impl Function {
                     Register::General(R10),
                 );
             }
+            self.kill(*value);
         }
 
         self.sink.load_int(Pointer.to_machine(), RAX, 0);
