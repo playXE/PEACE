@@ -1,8 +1,8 @@
-extern crate backend;
+extern crate peace_backend;
 
-use self::backend::registers::*;
-use self::backend::sink::*;
-use self::backend::types::*;
+use self::peace_backend::registers::*;
+use self::peace_backend::sink::*;
+use self::peace_backend::types::*;
 
 extern crate capstone;
 

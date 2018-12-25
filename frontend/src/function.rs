@@ -68,6 +68,7 @@ pub struct Function {
     free_regs: Vec<Register>,
     values: HashMap<Value, Kind>,
     value_kind: HashMap<Value, ValueKind>,
+    is_variable: HashSet<Value>,
     localsize: i32,
     idx: usize,
     pub fixups: Vec<CallFixup>,
@@ -98,7 +99,6 @@ impl Function {
             sink: sink,
             idx: 0,
             free_regs: vec![
-                Register::General(RAX),
                 Register::General(R13),
                 Register::General(R14),
                 Register::General(R15),
@@ -109,6 +109,7 @@ impl Function {
                 Register::Float(XMM12),
                 Register::Float(XMM13),
             ],
+            is_variable: HashSet::new(),
             fixups: Vec::new(),
             used_regs: HashSet::new(),
             is_alive: HashMap::new(),
@@ -280,7 +281,7 @@ impl Function {
         new_offset
     }
 
-    fn allocate_value(&mut self, v: Value) -> ValueKind {
+    fn allocate_value(&mut self, v: Value,/*TODO: var: bool*/) -> ValueKind {
         let data = self.values.get(&v).expect(&format!("Not found: {:?}", v));
 
         let general = match data {
@@ -290,7 +291,6 @@ impl Function {
 
         if general {
             let available = [
-                Register::General(RAX),
                 Register::General(RCX),
                 Register::General(RDX),
                 Register::General(R12),
@@ -302,6 +302,9 @@ impl Function {
 
             for register in available.iter() {
                 if !self.used_regs.contains(&register) {
+                    /*if self.is_variable.contains(&v) {
+                        continue;
+                    }*/
                     free = Some(register);
                     self.used_regs.insert(*register);
                     break;
@@ -326,6 +329,9 @@ impl Function {
             let mut free = None;
             for register in available.iter() {
                 if !self.used_regs.contains(&register) {
+                    /*if self.is_variable.contains(&v) {
+                        continue;
+                    }*/
                     free = Some(register);
                     self.used_regs.insert(*register);
                     break;
@@ -346,7 +352,9 @@ impl Function {
         let kinds = self.value_kind.clone();
         let vkind = kinds.get(&v);
         
-
+        if self.is_variable.contains(&v) {
+            return false;
+        }
         if vkind.is_some() {
             let vkind = vkind.unwrap();
             self.values.remove(&v);
@@ -377,7 +385,6 @@ impl Function {
 
     pub fn declare_variable(&mut self, index: u32, ty: Kind) -> Variable {
         let off = self.allocate(ty);
-
         let var = Variable::new(index as usize);
 
         self.variables.insert(var, ty);
@@ -500,6 +507,8 @@ impl Function {
         } else {
             self.load_value(src, Register::Float(XMM9));
         }
+        self.kill(base);
+        self.kill(src);
     }
 
     pub fn iconst(&mut self, imm: impl Into<i64>, ty: Kind) -> Value {
@@ -702,14 +711,10 @@ impl Function {
         let mut fpc = 0;
         let mut pc = 0;
         let mut used_params = vec![];
-        self.sink.emit_push_reg(RAX);
-        self.sink.emit_push_reg(RCX);
-        self.sink.emit_push_reg(RDX);
-        self.sink.emit_push_reg(R12);
-        self.sink.emit_push_reg(R13);
-        self.sink.emit_push_reg(R14);
-        self.sink.emit_push_reg(R15);
-
+        
+        //self.sink.emit_push_reg(RCX);
+        //self.sink.emit_push_reg(RDX);
+        
         for (idx, value) in args.iter().enumerate() {
             let kind = self.values.get(value).unwrap();
 
@@ -754,29 +759,34 @@ impl Function {
             }
             self.kill(*value);
         }
-
+        //self.sink.emit_push_reg(RAX);
+        self.sink.emit_push_reg(RCX);
+        self.sink.emit_push_reg(RDX);
+        self.sink.emit_push_reg(R12);
+        self.sink.emit_push_reg(R13);
+        self.sink.emit_push_reg(R14);
+        self.sink.emit_push_reg(R15);
         self.sink.load_int(Pointer.to_machine(), RAX, 0);
         self.fixups.push(CallFixup {
             name: fun.to_owned(),
             pos: self.sink.size() - 8,
         });
-
         self.sink.emit_call_reg(RAX);
-
-        //self.sink.emit_pop_reg(RAX);
+        
         self.sink.emit_pop_reg(R15);
         self.sink.emit_pop_reg(R14);
         self.sink.emit_pop_reg(R13);
         self.sink.emit_pop_reg(R12);
         self.sink.emit_pop_reg(RDX);
         self.sink.emit_pop_reg(RCX);
-        self.sink.emit_pop_reg(RAX);
+
         let value = Value::new(self.idx);
         self.idx += 1;
         self.values.insert(value, ret);
 
         let vkind = self.allocate_value(value);
         self.value_kind.insert(value, vkind.clone());
+
 
         match vkind {
             ValueKind::Reg(reg) => match reg {
@@ -805,6 +815,9 @@ impl Function {
                 }
             }
         }
+    
+        //self.sink.emit_pop_reg(RAX);
+        
         value
-    }
+    } 
 }

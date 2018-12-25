@@ -1,4 +1,4 @@
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug,Hash)]
 pub struct Reg(pub u8);
 
 impl From<Reg> for u32 {
@@ -7,7 +7,7 @@ impl From<Reg> for u32 {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug,Hash)]
 pub struct FReg(pub u8);
 
 impl From<FReg> for u32 {
@@ -113,7 +113,7 @@ impl FReg {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug,Hash)]
 pub enum Register {
     Float(FReg),
     General(Reg),
