@@ -1,0 +1,6 @@
+func main(): int {
+    var x: int = 2;
+    var y: int = 3;
+    var z: int = 4;
+    return x * y * z;
+}
