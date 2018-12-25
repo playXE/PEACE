@@ -23,6 +23,11 @@ struct Point { i32 x,i32 y}
 - You can't declare and use statically linked functions
 
 
+# Supported platforms
+- Windows x64
+- Linux x64
+- Linux x32 ( You must use 32 bit registers  (eax instead of rax and etc and use Int32 instead of Int64)
+- Windows x32 ( You must use 32 bit registers (eax instead of rax and etc and use Int32 instead of Int64)
 
 # Example of use
 ```rust
