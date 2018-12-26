@@ -84,7 +84,7 @@ pub struct FnDef {
     pub name: Box<Expr>,
     pub params: Vec<String>,
     pub body: Box<Stmt>,
-    pub params_: HashMap<String,TypeSpec>,
+    pub params_: HashMap<String, TypeSpec>,
     pub ret_ty: TypeSpec,
 }
 
@@ -95,7 +95,7 @@ pub struct ClassDef {
     pub methods: Vec<FnDef>,
 }
 
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct TypeSpec {
     pub name: String,
     pub is_ref: bool,
@@ -115,7 +115,7 @@ pub enum Stmt {
     While(Box<Expr>, Box<Stmt>),
     For(Box<Stmt>, Box<Expr>, Box<Expr>, Box<Stmt>),
     Loop(Box<Stmt>),
-    Var(String, TypeSpec,Option<Box<Expr>>),
+    Var(String, TypeSpec, Option<Box<Expr>>),
     Block(Vec<Stmt>),
     Expr(Box<Expr>),
     Label(String),
@@ -139,7 +139,7 @@ pub enum Expr {
     Index(String, Box<Expr>),
     Array(Vec<Expr>),
     New(String, Vec<Expr>),
-    Cast(TypeSpec,Box<Expr>),
+    Cast(TypeSpec, Box<Expr>),
     True,
     This,
     False,
@@ -541,7 +541,6 @@ impl<'a> TokenIterator<'a> {
                     return Some(Token::LexErr(LexError::MalformedNumber));
                 }
 
-                
                 'A'..='Z' | 'a'..='z' | '_' => {
                     let mut result = Vec::new();
                     result.push(c);
@@ -571,7 +570,7 @@ impl<'a> TokenIterator<'a> {
                         "return" => return Some(Token::Return),
                         "new" => return Some(Token::New),
                         "func" => return Some(Token::Fn),
-                        "ref"  => return Some(Token::Ref),
+                        "ref" => return Some(Token::Ref),
                         "null" => return Some(Token::Null),
                         "cast" => return Some(Token::Cast),
                         "enum" => return Some(Token::Enum),
@@ -944,7 +943,8 @@ fn parse_index_expr<'a>(
 
 fn parse_ident_expr<'a>(
     id: String,
-    input: &mut Peekable<TokenIterator<'a>>,rf: bool
+    input: &mut Peekable<TokenIterator<'a>>,
+    rf: bool,
 ) -> Result<Expr, ParseError> {
     match input.peek() {
         Some(&Token::LParen) => {
@@ -961,7 +961,7 @@ fn parse_ident_expr<'a>(
             } else {
                 Ok(Expr::Identifier(id.clone()))
             }
-        },
+        }
     }
 }
 
@@ -998,16 +998,32 @@ fn parse_array_expr<'a>(input: &mut Peekable<TokenIterator<'a>>) -> Result<Expr,
 fn parse_primary<'a>(input: &mut Peekable<TokenIterator<'a>>) -> Result<Expr, ParseError> {
     if let Some(token) = input.next() {
         match token {
+            Token::Cast => {
+                match input.next() {
+                    Some(Token::LessThan) => {
+                        let ts = parse_type(input)?;
+                        match input.next() {
+                            Some(Token::GreaterThan) => {},
+                            v => panic!("Unexpected {:?}",v)
+                        }
+                        let expr = parse_expr(input)?;
+                        
+                        Ok(Expr::Cast(ts,Box::new(expr)))
+                    }
+                    _ => panic!("Cast expression expects `<`"),
+                }
+                
+            }
             Token::IntConst(ref x) => Ok(Expr::IntConst(*x)),
             Token::FloatConst(ref x) => Ok(Expr::FloatConst(*x)),
             Token::StringConst(ref s) => Ok(Expr::StringConst(s.clone())),
             Token::CharConst(ref c) => Ok(Expr::CharConst(*c)),
-            Token::Identifier(ref s) => parse_ident_expr(s.clone(), input,false),
+            Token::Identifier(ref s) => parse_ident_expr(s.clone(), input, false),
             Token::Ref => match input.next() {
-                Some(Token::Identifier(ref id)) => parse_ident_expr(id.clone(),input,true),
+                Some(Token::Identifier(ref id)) => parse_ident_expr(id.clone(), input, true),
                 None => Err(ParseError::VarExpectsIdentifier),
                 _ => Err(ParseError::VarExpectsIdentifier),
-            }
+            },
             Token::New => parse_new_expr(input),
             Token::Null => Ok(Expr::Unit),
             Token::LParen => parse_paren_expr(input),
@@ -1129,7 +1145,7 @@ fn parse_binop<'a>(
                 }
                 Token::GreaterThanEqual => Expr::Op(Op::Ge, Box::new(lhs_curr), Box::new(rhs)),
                 Token::PowerOf => Expr::Op(Op::Isa, Box::new(lhs_curr), Box::new(rhs)),
-                Token::NotEqualTo => Expr::Op(Op::Ne,Box::new(lhs_curr),Box::new(rhs)),
+                Token::NotEqualTo => Expr::Op(Op::Ne, Box::new(lhs_curr), Box::new(rhs)),
                 /* Token::PlusAssign => {
                     let lhs_copy = lhs_curr.clone();
                     Expr::Assignment(
@@ -1335,16 +1351,16 @@ fn parse_var<'a>(input: &mut Peekable<TokenIterator<'a>>) -> Result<Stmt, ParseE
             let ts = parse_type(input)?;
             ts
         }
-        _ => return Err(ParseError::VarExpectsIdentifier)
+        _ => return Err(ParseError::VarExpectsIdentifier),
     };
 
     match input.peek() {
         Some(&Token::Equals) => {
             input.next();
             let initializer = parse_expr(input)?;
-            Ok(Stmt::Var(name, ts,Some(Box::new(initializer))))
+            Ok(Stmt::Var(name, ts, Some(Box::new(initializer))))
         }
-        _ => Ok(Stmt::Var(name,ts, None)),
+        _ => Ok(Stmt::Var(name, ts, None)),
     }
 }
 
@@ -1365,8 +1381,6 @@ fn parse_block<'a>(input: &mut Peekable<TokenIterator<'a>>) -> Result<Stmt, Pars
         Some(&Token::End) => true,
         _ => false,
     };
-
-    
 
     if !skip_body {
         while let Some(_) = input.peek() {
@@ -1394,7 +1408,10 @@ fn parse_block<'a>(input: &mut Peekable<TokenIterator<'a>>) -> Result<Stmt, Pars
             input.next();
             Ok(Stmt::Block(stmts))
         }
-        v => {println!("{:?}",v);Err(ParseError::MissingRCurly)},
+        v => {
+            println!("{:?}", v);
+            Err(ParseError::MissingRCurly)
+        }
     }
 }
 
@@ -1488,15 +1505,26 @@ fn parse_class_block<'a>(
     }
 }
 
-
-fn parse_type<'a>(input: &mut Peekable<TokenIterator<'a>>) -> Result<TypeSpec,ParseError> {
+fn parse_type<'a>(input: &mut Peekable<TokenIterator<'a>>) -> Result<TypeSpec, ParseError> {
     match input.next() {
         Some(Token::Ref) => match input.next() {
-            Some(Token::Identifier(tname)) => Ok(TypeSpec {name: tname.clone(),is_ref: true}),
-            v => {println!("{:?}",v);return Err(ParseError::VarExpectsIdentifier)}
+            Some(Token::Identifier(tname)) => Ok(TypeSpec {
+                name: tname.clone(),
+                is_ref: true,
+            }),
+            v => {
+                println!("{:?}", v);
+                return Err(ParseError::VarExpectsIdentifier);
+            }
+        },
+        Some(Token::Identifier(tname)) => Ok(TypeSpec {
+            name: tname.clone(),
+            is_ref: false,
+        }),
+        v => {
+            println!("{:?}", v);
+            return Err(ParseError::VarExpectsIdentifier);
         }
-        Some(Token::Identifier(tname)) => Ok(TypeSpec {name: tname.clone(),is_ref: false}),
-        v => {println!("{:?}",v);return Err(ParseError::VarExpectsIdentifier)}
     }
 }
 
@@ -1531,17 +1559,17 @@ fn parse_fn<'a>(input: &mut Peekable<TokenIterator<'a>>) -> Result<FnDef, ParseE
             match input.next() {
                 Some(Token::RParen) => break,
                 Some(Token::Comma) => (),
-                Some(Token::Identifier(ref s)) => {
-                    match input.next() {
-                        Some(Token::Colon) => {
-                            let ts = parse_type(input)?;
-                            params.insert(s.clone(), ts);
-                            params_.push(s.clone());
-                        }
-                        v => {println!("{:?}",v);
-                        return Err(ParseError::MalformedCallExpr);}
+                Some(Token::Identifier(ref s)) => match input.next() {
+                    Some(Token::Colon) => {
+                        let ts = parse_type(input)?;
+                        params.insert(s.clone(), ts);
+                        params_.push(s.clone());
                     }
-                }
+                    v => {
+                        println!("{:?}", v);
+                        return Err(ParseError::MalformedCallExpr);
+                    }
+                },
                 v => {
                     println!("{:?}", v);
                     return Err(ParseError::MalformedCallExpr);
@@ -1551,8 +1579,8 @@ fn parse_fn<'a>(input: &mut Peekable<TokenIterator<'a>>) -> Result<FnDef, ParseE
     }
 
     match input.peek() {
-        Some(Token::Colon) => {input.next()},
-        _ => panic!("Expected colon at return type")
+        Some(Token::Colon) => input.next(),
+        _ => panic!("Expected colon at return type"),
     };
 
     let ts = parse_type(input)?;
