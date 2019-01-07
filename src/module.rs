@@ -17,6 +17,7 @@ pub struct DataContext {
     pub data: *const u8,
     pub is_sized: bool,
     pub size: usize,
+    pub linkage: Linkage
 }
 
 
@@ -25,6 +26,7 @@ pub struct DataContext {
 pub struct Module {
     pub data: HashMap<String,DataContext>,
     pub uncompiled_functions: HashMap<String,Function>,  
+    pub uncompiled_data: HashMap<String,DataContext>,
 }
 
 
@@ -34,6 +36,7 @@ impl Module {
         Module {
             data: HashMap::new(),
             uncompiled_functions: HashMap::new(),
+            uncompiled_data: HashMap::new(),
         }
     }
 
@@ -79,7 +82,7 @@ pub trait Backend<'a> {
     /// Declare data in current context
     fn declare_data(&mut self,_name: String,_linkage: Linkage) {}
     /// Initialize data to some value
-    fn define_data(&mut self,_name: String,_data: Vec<u8>) {}
+    fn define_data(&mut self,_name: String,_data: &[u8]) {}
 
     /// Returns the finalized function from backend
     fn get_finalized_function(&mut self,_f: Self::CompiledFunction) -> Self::FinalizedFunction {unimplemented!()}
@@ -100,8 +103,29 @@ impl<'a> Backend<'a> for Module {
     }
 
     fn declare_data(&mut self,_name: String, _linkage: Linkage) {
-        // do nothing
+        let ctx = DataContext {
+            data: 0 as *const u8,
+            kind: DataKind::Data,
+            is_sized: false,
+            size: 0,
+            linkage: _linkage
+        };
+        self.data.insert(_name.clone(),ctx.clone());
+        self.uncompiled_data.insert(_name,ctx);
+
     }
+    fn define_data(&mut self,name: String,data: &[u8]) {
+        let data = DataContext {
+            data: data.as_ptr(),
+            kind: DataKind::Data,
+            is_sized: true,
+            size: data.len(),
+            linkage: Linkage::Local,
+        };
+        self.data.insert(name,data);
+    }
+
+    
 
     fn get_finalized_data(&mut self,f: Self::CompiledData) -> (*const u8,usize) {
         let data = self.data.get(f).expect("Data not found");
@@ -122,6 +146,33 @@ impl<'a> Backend<'a> for Module {
         }
     }
     fn finish(&mut self) {
+        for (name,ctx) in self.uncompiled_data.iter_mut() {
+            let data: &mut DataContext = ctx;
+            match &data.linkage {
+                Linkage::Local => (),
+                Linkage::Extern(ptr) => {
+                    data.data = *ptr;
+                }
+                Linkage::Libc => {
+                    use crate::dylib as lib;
+                    unsafe {
+                        let lib = lib::Library::new("libc++.so.1").expect("Libc not found");
+                        let symbol: lib::Symbol<*const u8> = lib.get(name.as_bytes()).unwrap();
+                        data.data = *symbol;
+                    }
+                }
+                Linkage::Dylib(libname) => {
+                    use crate::dylib as lib;
+
+                    unsafe {
+                        let lib = lib::Library::new(libname).expect("failed to load library");
+                        let symbol: lib::Symbol<*const u8> = lib.get(name.as_bytes()).unwrap();
+                        data.data = *symbol;
+                    }
+                }
+            }
+        }
+
         for (name,func) in self.uncompiled_functions.iter_mut() {
             let func: &mut Function = func;
             match &func.linkage {
@@ -132,9 +183,27 @@ impl<'a> Backend<'a> for Module {
                         size: 0,
                         is_sized: false,
                         kind: DataKind::Function,
+                        linkage: func.linkage.clone()
                     };
                     self.data.insert(name.to_owned(),data);
                     continue;
+                }
+                Linkage::Libc => {
+                    use crate::dylib as lib;
+                    
+                    unsafe {
+                        let lib = lib::Library::new("libc++.so.1").expect("Failed to open library");
+                        let func: lib::Symbol<unsafe extern fn()> = lib.get(func.name.as_bytes()).expect("function not found");
+                        let data = DataContext {
+                            data: func.clone().into_raw().get_ptr(),
+                            size: 0,
+                            is_sized: false,
+                            linkage: Linkage::Extern(func.into_raw().get_ptr()),
+                            kind: DataKind::Function,
+                        };
+                        self.data.insert(name.to_owned(),data);
+                        continue;
+                    }
                 }
                 Linkage::Dylib(libname) => {
                     use crate::dylib as lib;
@@ -143,9 +212,10 @@ impl<'a> Backend<'a> for Module {
                         let lib = lib::Library::new(libname).expect("Failed to open library");
                         let func: lib::Symbol<unsafe extern fn()> = lib.get(func.name.as_bytes()).expect("function not found");
                         let data = DataContext {
-                            data: func.into_raw().get_ptr(),
+                            data: func.clone().into_raw().get_ptr(),
                             size: 0,
                             is_sized: false,
+                            linkage: Linkage::Extern(func.into_raw().get_ptr()),
                             kind: DataKind::Function,
                         };
                         self.data.insert(name.to_owned(),data);
@@ -162,7 +232,8 @@ impl<'a> Backend<'a> for Module {
                 data: memory.ptr(),
                 size: memory.size(),
                 is_sized: true,
-                kind: DataKind::Function
+                kind: DataKind::Function,
+                linkage: func.linkage.clone(),
             };
 
             self.data.insert(name.to_owned(),data);

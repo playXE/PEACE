@@ -11,13 +11,14 @@ fn main() {
     module.declare_function("main".into(), Linkage::Local);
     //module.declare_function("puts".into(), Linkage::Extern(puts as *const u8));
     module.declare_function("init".into(), Linkage::Local);   
-    let string = format!("/usr/lib64/libc++.so.1");
-    module.declare_function("printf".into(), Linkage::Dylib(string));
+    module.declare_function("printf".into(), Linkage::Libc);
+    module.define_data("string.0".into(), b"Hello,world!");
     let func = module.get_function(&"main".to_string());
+
 
     let int = Int(64);
 
-    let string = func.iconst(int, b"Hello,world!\n\0".as_ptr() as i64);
+    let string = func.load_global_data("string.0");
     let ret = func.call_indirect("printf", &[string], int);
     func.ret(ret);
 
