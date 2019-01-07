@@ -1,70 +1,50 @@
-# PEACE - Peak Compiler
+# PEACE
 
-PEACE is a library for x86_64 machine code generation.
-
-# TODO
-- Implement basic binary and unary operations
-- Better register allocation
-- Write a IR code parser
-- Write a AOT backend
-
-# Known problems
-- You cannot use pointer that you allocated in your JIT code,e.g
-```llvm
-struct Point { i32 x,i32 y}
-
-%size = iconst.i64 8
-
-%ptr = call_indirect $malloc(%size)  ; create pointer with size of Point
-%v1 = iconst.i32 2
-; Store %v1(Point.x)
-%ptr + 0 = %v1 ; Segfault there
-```
-- You can't declare and use statically linked functions
+PEACE (Peak Compiler) - library for emitting x86_64 code using jazz-jit library
 
 
-# Supported platforms
-- Windows x64
-- Linux x64
-- Linux x32 ( You must use 32 bit registers  (eax instead of rax and etc and use Int32 instead of Int64)
-- Windows x32 ( You must use 32 bit registers (eax instead of rax and etc and use Int32 instead of Int64)
-
-# Example of use
+# Features
+- You can import functions or other data from dynamic library
 ```rust
-extern crate peace;
+    module.declare_function("main".into(), Linkage::Local);
+    module.declare_function("puts".into(), Linkage::Dylib("/usr/lib64/libc++.so.1".into())); // Yes, loading a c++ functions supported too
+    let func = module.get_function(&"main".to_string());
 
-use self::peace::prelude::function::*;
-use self::peace::prelude::module::*;
-use self::peace::prelude::kind::*;
-use self::peace::prelude::abi::Linkage;
+    let string = func.iconst(Int(64),b"Hello,world!".as_ptr() as i64);
+    let v1 = func.call_indirect("puts",&[string], Int(32));
+    func.ret(v1);
+```
+- Register allocation on the fly
 
-extern "C" {
-    fn printf();
-}
+```rust
+let int = Type::Int(32);
 
-fn main() {
-    let mut module = Module::new();
-
-    module.add_function(Function::new("main",Linkage::Local));
-    module.add_function(Function::new("printf",Linkage::Extern(printf as *const u8)));
-
-    let main_func = module.get_mut_func("main".to_string());
-
-    let cstring = main_func.iconst(b"Hello,world!\n\0".as_ptr() as i64,Int64); // Int64 is a pointer too
-    main_func.call_indirect("printf".into(),&[cstring],Int32);
-    let null = main_func.iconst(0,Int32);
-    main_func.ret(null);
-
-    module.finish(); // compile all functions or resolve imports
-
-    let data = module.get_data("main".to_string());
-
-    let ptr = data.ptr();
-
-    let func: fn() -> i32 = unsafe {::std::mem::transmute(ptr)};
-    func();
-}
-
+let v1 = func.iconst(int,4);
+let v2 = func.iconst(int,2);
+let v3 = func.imul(v1,v2);
+let v4 = func.iconst(int,4);
+let v5 = func.iadd(v4,v3);
+func.ret(v5);
 
 ```
+Assembly:
+```assembly
+0x0: pushq %rbp
+0x1: movq %rsp, %rbp
+0x4: movl $4, %ecx
+0x9: movl $2, %r8d
+0xf: imull %r8d, %ecx
+0x13: movl $4, %r8d
+0x19: addl %ecx, %r8d
+0x1c: movl %r8d, %ecx
+0x1f: movl %ecx, %eax
+0x21: popq %rbp
+0x22: retq
+```
+
+# Limitations
+
+- There are no liveness analysis,after using `Value` just "destroyed"
+- Only integers for now supported
+
 

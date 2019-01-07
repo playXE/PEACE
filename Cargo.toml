@@ -1,9 +1,14 @@
 [package]
-name = "peace"
+name = "jazz-ir"
 version = "0.1.0"
-authors = ["Adel Prokurov <adel.prokurov@protonmail.com>"]
+authors = ["aprokurov"]
 edition = "2018"
 
 [dependencies]
-peace-backend = {path = "backend"}
-peace-frontend = {path = "frontend"}
+jazz-jit = {git = "https://github.com/jazz-lang/jazz-jit"}
+capstone = "0.5.0"
+winapi = "0.3.6"
+libc = "0.2"
+
+[build-dependencies]
+cc = "1"

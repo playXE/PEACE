@@ -1,7 +1,0 @@
-func main(): int {
-	return add(100,200);
-}
-
-func add(x: int,y: int): int {
-	return x + y;
-}
