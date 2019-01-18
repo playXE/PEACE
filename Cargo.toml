@@ -1,14 +1,14 @@
 [package]
-name = "PEACE"
+name = "peak-compiler"
 version = "0.1.0"
-authors = ["aprokurov"]
+authors = ["adelprokurov"]
 edition = "2018"
 
 [dependencies]
-jazz-jit = {git = "https://github.com/jazz-lang/jazz-jit"}
+libc = "0.2.47"
+byteorder = "1.2.7"
 capstone = "0.5.0"
-winapi = "0.3.6"
-libc = "0.2"
+fnv = "1.0.6"
 
-[build-dependencies]
-cc = "1"
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = ["winbase", "memoryapi"] }

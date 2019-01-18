@@ -2,22 +2,26 @@
 
 PEACE (Peak Compiler) - library for emitting x86_64 code using jazz-jit library
 
+# Examples
+```rust
+module.declare_function("main",Linkage::Local);
+module.declare_function("puts",Linkage::Import);
+
+let builder = module.get_function("main");
+
+let str = builder.iconst(I64,b"Hello,world!\0".as_ptr() as i64);
+let ret = builder.call("puts",&[str],I32);
+builder.ret(ret);
+
+
+```
+
 
 # Features
-- You can import functions or other data from dynamic library
-```rust
-    module.declare_function("main".into(), Linkage::Local);
-    module.declare_function("puts".into(), Linkage::Dylib("libc++.so.1".into())); // Yes, loading a c++ functions supported too
-    let func = module.get_function(&"main".to_string());
-
-    let string = func.iconst(Int(64),b"Hello,world!".as_ptr() as i64);
-    let v1 = func.call_indirect("puts",&[string], Int(32));
-    func.ret(v1);
-```
 - Register allocation on the fly
 
 ```rust
-let int = Type::Int(32);
+let int = I32;
 
 let v1 = func.iconst(int,4);
 let v2 = func.iconst(int,2);

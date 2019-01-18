@@ -1,4 +1,2 @@
 /target
 **/*.rs.bk
-/backend/target
-/frontend/target

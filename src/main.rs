@@ -1,46 +1,47 @@
-extern crate jazz_ir;
-
-use jazz_ir::*;
-use self::ty::*;
-use self::module::*;
 use capstone::prelude::*;
+use std::mem;
+
+use peak_compiler::module::*;
+use peak_compiler::types::*;
 
 fn main() {
     
     let mut module = Module::new();
-    module.declare_function("main".into(), Linkage::Local);
-    //module.declare_function("puts".into(), Linkage::Extern(puts as *const u8));
-    module.declare_function("init".into(), Linkage::Local);   
-    module.declare_function("printf".into(), Linkage::Libc);
-    module.define_data("string.0".into(), b"Hello,world!");
-    let func = module.get_function(&"main".to_string());
+    module.declare_function("main", Linkage::Local);
+    module.declare_function("puts",Linkage::Import);
 
 
-    let int = Int(64);
-
-    let string = func.load_global_data("string.0");
-    let ret = func.call_indirect("printf", &[string], int);
+    let func = module.get_function("main");
+    func.prolog();
+    let str = func.iconst(I64,b"Hello,world!\0".as_ptr() as i64);
+    let ret = func.call("puts",&[str],I32);
     func.ret(ret);
 
+
+    func.fix_prolog();
+
     module.finish();
-    let (data,size) = module.get_finalized_data(&"main".to_owned());
-    let mut cs = Capstone::new()
+
+    let (ptr, size) = module.get_finalized_data("main");
+
+    let mut cs: Capstone = Capstone::new()
         .x86()
         .mode(arch::x86::ArchMode::Mode64)
-        .syntax(arch::x86::ArchSyntax::Att)
+        .syntax(arch::x86::ArchSyntax::Intel)
         .detail(true)
-        .build().unwrap();
+        .build()
+        .unwrap();
 
+    let slice = unsafe { ::std::slice::from_raw_parts(ptr, size) };
 
-    let ins = cs.disasm_all(unsafe {::std::slice::from_raw_parts(data,size)},0).unwrap();
-    for i in ins.iter() {
-        println!("{}",i);
+    let ins = cs.disasm_all(slice, 0);
+
+    for i in &ins {
+        println!("{}", i);
     }
 
-    let fdata = module.get_finalized_function(&"main".to_string());
+    let ptr = module.get_finalized_function("main");
 
-    let func: fn() -> i32 = unsafe {::std::mem::transmute(fdata)};
-
-    println!("{}",func());
-
+    let f: fn() -> i32 = unsafe { mem::transmute(ptr) };
+    println!("{}", f());
 }
