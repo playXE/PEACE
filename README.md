@@ -1,6 +1,6 @@
 # PEACE
 
-PEACE (Peak Compiler) - library for emitting x86_64 code using jazz-jit library
+PEACE (Peak Compiler) - library for emitting x86_64 code
 
 # Examples
 ```rust
@@ -35,13 +35,13 @@ Assembly:
 ```assembly
 0x0: pushq %rbp
 0x1: movq %rsp, %rbp
-0x4: movl $4, %ecx
+0x4: movl $4, %ebx
 0x9: movl $2, %r8d
-0xf: imull %r8d, %ecx
+0xf: imull %r8d, %ebx
 0x13: movl $4, %r8d
-0x19: addl %ecx, %r8d
-0x1c: movl %r8d, %ecx
-0x1f: movl %ecx, %eax
+0x19: addl %ebx, %r8d
+0x1c: movl %r8d, %ebx
+0x1f: movl %ebx, %eax
 0x21: popq %rbp
 0x22: retq
 ```
