@@ -1,10 +1,11 @@
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub struct ForwardJump {
     pub at: usize,
     pub to: usize,
 }
+use super::constants_x64::Register;
 use super::dseg::DSeg;
-use super::registers::Register;
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 pub type Label = usize;
 
@@ -18,7 +19,8 @@ impl Idx for usize {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy)]
+#[repr(C)]
 pub enum Mem {
     // rbp + val1
     Local(i32),
@@ -36,7 +38,7 @@ pub enum Mem {
 #[derive(Clone, Debug)]
 #[repr(C)]
 pub struct Assembler {
-    pub data: Vec<u8>,
+    pub(crate) data: Vec<u8>,
     pub dseg: DSeg,
     pub jumps: Vec<ForwardJump>,
     pub labels: Vec<Option<usize>>,
@@ -111,15 +113,12 @@ impl Assembler {
     pub fn pos(&self) -> usize {
         self.data.len()
     }
-
     pub fn emit(&mut self, byte: u8) {
         self.data.write_u8(byte).unwrap();
     }
-
     pub fn emit32(&mut self, uint: u32) {
         self.data.write_u32::<LittleEndian>(uint).unwrap();
     }
-
     pub fn emit64(&mut self, ulong: u64) {
         self.data.write_u64::<LittleEndian>(ulong).unwrap();
     }

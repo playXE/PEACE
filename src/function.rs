@@ -1,134 +1,141 @@
-use self::compiler::prelude::*;
-use crate::compiler;
-use crate::dfg::ValueData;
-use crate::module::Linkage;
+use crate::backend::align;
+use crate::backend::assembler::*;
+use crate::backend::assemblerx64::*;
+use crate::backend::constants_x64::*;
+use crate::backend::*;
+use crate::module::*;
 use crate::types::*;
-use crate::utils::align;
-use crate::EntityRef;
-use crate::{Value, Variable};
+use std::collections::{HashMap, HashSet};
 
-#[cfg(target_family = "windows")]
-pub const ARG_GPR: [Register; 4] = [RCX, RDX, R8, R9];
-#[cfg(target_family = "windows")]
-pub const ARG_FPR: [Register; 4] = [XMM0, XMM1, XMM2, XMM3];
-
-#[cfg(target_family = "unix")]
-pub const ARG_GPR: [Register; 6] = [RDI, RSI, RDX, RCX, R8, R9];
-#[cfg(target_family = "unix")]
-pub const ARG_FPR: [XMMRegister; 8] = [XMM0, XMM1, XMM2, XMM3, XMM4, XMM5, XMM6, XMM7];
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Reloc {
+#[derive(Clone, Debug, Copy, PartialEq)]
+enum ValueData {
+    Gpr(Register),
+    Fpr(XMMRegister),
+    Stack(i32),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Reloc {
     pub global_name: String,
     pub at: usize,
     pub to: usize,
 }
 
-use fnv::{FnvHashMap, FnvHashSet};
+impl ValueData {
+    pub fn gpr(&self) -> Register {
+        match self {
+            ValueData::Gpr(reg) => *reg,
+            _ => panic!(""),
+        }
+    }
+    pub fn fpr(&self) -> XMMRegister {
+        match self {
+            ValueData::Fpr(reg) => *reg,
+            _ => panic!(""),
+        }
+    }
+    pub fn off(&self) -> i32 {
+        match self {
+            ValueData::Stack(off) => *off,
+            _ => panic!(""),
+        }
+    }
 
+    pub fn is_gpr(&self) -> bool {
+        match self {
+            ValueData::Gpr(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_off(&self) -> bool {
+        match self {
+            ValueData::Stack(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_fpr(&self) -> bool {
+        !self.is_gpr() && !self.is_off()
+    }
+}
+
+#[cfg(target_family = "windows")]
+const ARG_GPR: [Register; 4] = [RCX, RDX, R8, R9];
+#[cfg(target_family = "windows")]
+const ARG_FPR: [Register; 4] = [XMM0, XMM1, XMM2, XMM3];
+
+#[cfg(target_family = "unix")]
+const ARG_GPR: [Register; 6] = [RDI, RSI, RDX, RCX, R8, R9];
+#[cfg(target_family = "unix")]
+const ARG_FPR: [XMMRegister; 8] = [XMM0, XMM1, XMM2, XMM3, XMM4, XMM5, XMM6, XMM7];
 #[derive(Clone)]
 pub struct Function {
     pub name: String,
-    asm: Assembler,
-    pub relocs: Vec<Reloc>,
-    epilogs: Vec<Reloc>,
-    prolog: Reloc,
-    pub linkage: Linkage,
-    pub values: FnvHashMap<Value, ValueData>,
-    pub value_types: FnvHashMap<Value, Type>,
-    pub variables: FnvHashMap<Variable, i32>,
-    pub variable_types: FnvHashMap<Variable, Type>,
-    used_registers: FnvHashSet<Reg>,
-    value_id: usize,
-    stack_offset: i32,
+    pub asm: Assembler,
+    pub free: HashSet<Reg>,
+    pub stack_offset: i32,
+    pub used: HashSet<Reg>,
+    pub(crate) relocs: Vec<Reloc>,
+    variables: HashMap<u32, (Type, i32)>,
+    values: HashMap<Value, (ValueData, Type)>,
+    value_id: u32,
+    labels: HashMap<String, usize>,
+    pub linkage: crate::module::Linkage,
 }
 
 impl Function {
     pub fn new(name: &str, linkage: Linkage) -> Function {
-        Self {
+        let mut f = Function {
+            values: HashMap::new(),
             name: name.to_owned(),
-            asm: Assembler::new(),
             linkage: linkage,
-            relocs: vec![],
-            epilogs: vec![],
-            prolog: Reloc {
-                global_name: "<prolog>".into(),
-                at: 0,
-                to: 0,
-            },
-            values: FnvHashMap::default(),
-            value_types: FnvHashMap::default(),
-            variables: FnvHashMap::default(),
-            variable_types: FnvHashMap::default(),
-            used_registers: FnvHashSet::default(),
+            asm: Assembler::new(),
+            free: HashSet::new(),
             stack_offset: 0,
+            used: HashSet::new(),
+            relocs: vec![],
+            variables: HashMap::new(),
             value_id: 0,
-        }
+            labels: HashMap::new(),
+        };
+        f.new_label("<__epilog__>");
+        f.prolog();
+        f
+    }
+    pub fn new_label(&mut self, name: &str) {
+        let label = self.asm.create_label();
+        self.labels.insert(name.to_owned(), label);
     }
 
-    pub fn get_value_type(&self, x: Value) -> Type {
-        *self
-            .value_types
-            .get(&x)
-            .expect(&format!("value {:?} not defined", x))
+    pub fn bind_label(&mut self, name: &str) {
+        let label = self.labels.get(name).expect("Label not found");
+
+        self.asm.bind_label(*label);
     }
 
-    pub fn get_value_loc(&self, x: Value) -> ValueData {
-        *self
-            .values
-            .get(&x)
-            .expect(&format!("value {:?} not defined", x))
-    }
-
-    pub fn get_data(&self) -> &[u8] {
-        &self.asm.data()
-    }
-
-    pub fn asm_mut<'r>(&'r mut self) -> &'r mut Assembler {
+    pub fn asm_mut<'a>(&'a mut self) -> &'a mut Assembler {
         &mut self.asm
     }
 
-    pub fn prolog(&mut self) {
-        emit_pushq_reg(&mut self.asm, RBP);
-        emit_mov_reg_reg(&mut self.asm, 1, RSP, RBP);
-        /*self.asm.emit(0x48);
-        self.asm.emit(0x81);
-        self.asm.emit(0xec);
-        self.asm.emit32(0);
-        self.prolog = Reloc {
-            global_name: "<prolog>".into(),
-            at: self.asm.pos() - 4,
-            to: self.asm.pos(),
-        };*/
+    pub fn get_value_type(&self, value: Value) -> Type {
+        self.values.get(&value).expect("Value not found").1
     }
 
-    pub fn epilog(&mut self) {
-        //emit_addq_imm_reg(&mut self.asm, self.stack_offset, RSP);
-        //emit_mov_reg_reg(&mut self.asm, 1,RBP,RSP);
-        emit_popq_reg(&mut self.asm, RBP);
-        emit_retq(&mut self.asm);
-    }
-
-    pub fn allocate_in_stack(&mut self, ty: Type) -> i32 {
-        let size = ty.to_machine().size();
-        let offset = align(self.stack_offset + size as i32, size as i32);
-        self.stack_offset = offset;
-        offset
+    fn get_value_loc(&self, value: Value) -> ValueData {
+        self.values.get(&value).expect("Value not found").0
     }
 
     fn free(&mut self, v: Value) {
         let loc = self.get_value_loc(v);
         match loc {
             ValueData::Gpr(reg) => {
-                self.used_registers.remove(&Reg::Gpr(reg));
+                self.used.remove(&Reg::Gpr(reg));
             }
             ValueData::Fpr(reg) => {
-                self.used_registers.remove(&Reg::Float(reg));
+                self.used.remove(&Reg::Float(reg));
             }
             _ => {}
         };
         self.values.remove(&v);
-        self.value_types.remove(&v);
     }
 
     fn allocate_reg(&mut self, ty: Type) -> ValueData {
@@ -145,8 +152,8 @@ impl Function {
 
         if !ty.is_float() {
             for reg in AVAIL_GPR.iter() {
-                if !self.used_registers.contains(&Reg::Gpr(*reg)) {
-                    self.used_registers.insert(Reg::Gpr(*reg));
+                if !self.used.contains(&Reg::Gpr(*reg)) {
+                    self.used.insert(Reg::Gpr(*reg));
 
                     return ValueData::Gpr(*reg);
                 }
@@ -155,14 +162,21 @@ impl Function {
             ValueData::Stack(-off)
         } else {
             for reg in AVAIL_FPR.iter() {
-                if !self.used_registers.contains(&Reg::Float(*reg)) {
-                    self.used_registers.insert(Reg::Float(*reg));
+                if !self.used.contains(&Reg::Float(*reg)) {
+                    self.used.insert(Reg::Float(*reg));
                     return ValueData::Fpr(*reg);
                 }
             }
             let off = self.allocate_in_stack(ty);
             ValueData::Stack(-off)
         }
+    }
+
+    pub fn allocate_in_stack(&mut self, ty: Type) -> i32 {
+        let size = ty.to_machine().size();
+        let offset = align(self.stack_offset + size as i32, size as i32);
+        self.stack_offset = offset;
+        offset
     }
 
     pub fn iconst(&mut self, ty: Type, imm: impl Into<i64>) -> Value {
@@ -183,11 +197,9 @@ impl Function {
             self.asm
                 .store_mem(ty.to_machine(), Mem::Local(loc.off()), Reg::Gpr(RAX));
         }
-        self.values.insert(value, loc);
-        self.value_types.insert(value, ty);
+        self.values.insert(value, (loc, ty));
         value
     }
-
     fn bin_int(
         &mut self,
         x: Value,
@@ -203,8 +215,7 @@ impl Function {
         self.free(y);
         let loc = self.allocate_reg(ty);
 
-        self.values.insert(value, loc);
-        self.value_types.insert(value, ty);
+        self.values.insert(value, (loc, ty));
 
         if x_loc.is_gpr() && y_loc.is_gpr() {
             if loc.is_gpr() {
@@ -253,7 +264,10 @@ impl Function {
         }
         value
     }
-
+    pub fn prolog(&mut self) {
+        emit_pushq_reg(&mut self.asm, RBP);
+        emit_mov_reg_reg(&mut self.asm, 1, RSP, RBP);
+    }
     /// Integer addition
     pub fn iadd(&mut self, x: Value, y: Value) -> Value {
         self.bin_int(x, y, &Assembler::int_add)
@@ -275,6 +289,149 @@ impl Function {
         self.bin_int(x, y, &Assembler::int_mod)
     }
 
+
+    pub fn jump(&mut self, label: &str) {
+        let l = self.labels.get(label).expect("Label not found");
+        emit_jmp(&mut self.asm, *l);
+    }
+
+    pub fn int_cmp(&mut self, x: Value, y: Value, cc: CondCode) -> Value {
+        let value = Value::new(self.value_id);
+        self.value_id += 1;
+        let (x_loc, x_ty) = (self.get_value_loc(x), self.get_value_type(x));
+        let (y_loc, y_ty) = (self.get_value_loc(y), self.get_value_type(y));
+
+        self.free(x);
+        self.free(y);
+
+        let loc = self.allocate_reg(Type::I8);
+
+        if x_loc.is_off() && y_loc.is_off() {
+            self.asm
+                .load_mem(x_ty.to_machine(), Reg::Gpr(RAX), Mem::Local(x_loc.off()));
+            self.asm
+                .load_mem(y_ty.to_machine(), Reg::Gpr(RBX), Mem::Local(y_loc.off()));
+            self.asm.cmp_reg(x_ty.to_machine(), RAX, RBX);
+            self.asm.set(RAX, cc);
+        } else if x_loc.is_off() {
+            self.asm
+                .load_mem(x_ty.to_machine(), Reg::Gpr(RAX), Mem::Local(x_loc.off()));
+            self.asm.cmp_reg(x_ty.to_machine(), RAX, y_loc.gpr());
+            self.asm.set(RAX, cc);
+        } else if y_loc.is_off() {
+            self.asm
+                .load_mem(y_ty.to_machine(), Reg::Gpr(RAX), Mem::Local(y_loc.off()));
+            self.asm.cmp_reg(x_ty.to_machine(), x_loc.gpr(), RAX);
+            self.asm.set(RAX, cc);
+        } else {
+            self.asm
+                .cmp_reg(x_ty.to_machine(), x_loc.gpr(), y_loc.gpr());
+            self.asm.set(RAX, cc);
+        }
+
+        if loc.is_off() {
+            self.asm
+                .store_mem(MachineMode::Int8, Mem::Local(loc.off()), Reg::Gpr(RAX));
+        } else {
+            emit_movb_reg_reg(&mut self.asm, RAX, loc.gpr());
+        }
+
+        self.values.insert(value, (loc, x_ty));
+
+        value
+    }
+
+    pub fn float_cmp(&mut self, x: Value, y: Value, cc: CondCode) -> Value {
+        let value = Value::new(self.value_id);
+        self.value_id += 1;
+
+        let (x_loc, x_ty) = (self.get_value_loc(x), self.get_value_type(x));
+        let (y_loc, y_ty) = (self.get_value_loc(y), self.get_value_type(y));
+
+        assert!(x_ty.is_float() && y_ty.is_float(), "Float values expected");
+
+        self.free(x);
+        self.free(y);
+        let loc = self.allocate_reg(Type::I8);
+        if x_loc.is_off() && y_loc.is_off() {
+            self.asm
+                .load_mem(x_ty.to_machine(), Reg::Float(XMM0), Mem::Local(x_loc.off()));
+            self.asm
+                .load_mem(y_ty.to_machine(), Reg::Float(XMM1), Mem::Local(y_loc.off()));
+
+            self.asm.float_cmp(x_ty.to_machine(), RAX, XMM0, XMM1, cc);
+
+        } else if x_loc.is_off() {
+            self.asm
+                .load_mem(x_ty.to_machine(), Reg::Float(XMM0), Mem::Local(x_loc.off()));
+            self.asm
+                .float_cmp(x_ty.to_machine(), RAX, XMM0, y_loc.fpr(), cc);
+        } else if y_loc.is_off() {
+            self.asm
+                .load_mem(y_ty.to_machine(), Reg::Float(XMM0), Mem::Local(y_loc.off()));
+            self.asm
+                .float_cmp(x_ty.to_machine(), RAX, x_loc.fpr(), XMM0, cc);
+        } else {
+            self.asm
+                .float_cmp(x_ty.to_machine(), RAX, x_loc.fpr(), y_loc.fpr(), cc);
+        }
+        if loc.is_off() {
+            self.asm
+                .store_mem(MachineMode::Int8, Mem::Local(loc.off()), Reg::Gpr(RAX));
+        } else {
+            emit_movb_reg_reg(&mut self.asm, RAX, loc.gpr());
+        }
+
+        self.values.insert(value, (loc, x_ty));
+        value
+    }
+
+    pub fn load(&mut self, base: Value, offset: i32, ty: Type) -> Value {
+        assert!(!self.get_value_type(base).is_float());
+        let value = Value::new(self.value_id);
+        self.value_id += 1;
+        let loc = self.get_value_loc(base);
+        self.free(base);
+        if loc.is_off() {
+            self.asm
+                .load_mem(ty.to_machine(), Reg::Gpr(RAX), Mem::Local(loc.off()));
+        }
+        let new_loc = self.allocate_reg(ty);
+        if ty.is_float() {
+            self.asm.load_mem(
+                ty.to_machine(),
+                Reg::Float(XMM0),
+                Mem::Base(if loc.is_off() { RAX } else { loc.gpr() }, offset),
+            );
+            if new_loc.is_off() {
+                self.asm
+                    .store_mem(ty.to_machine(), Mem::Local(new_loc.off()), Reg::Float(XMM0));
+            } else {
+                if ty.x64() != 0 {
+                    movsd(&mut self.asm, loc.fpr(), XMM0);
+                } else {
+                    movss(&mut self.asm, loc.fpr(), XMM0);
+                }
+            }
+        } else {
+            self.asm.load_mem(
+                ty.to_machine(),
+                Reg::Gpr(RAX),
+                Mem::Base(if loc.is_off() { RAX } else { loc.gpr() }, offset),
+            );
+
+            if new_loc.is_off() {
+                self.asm
+                    .store_mem(ty.to_machine(), Mem::Local(new_loc.off()), Reg::Gpr(RAX));
+            } else {
+                emit_mov_reg_reg(&mut self.asm, ty.x64(), RAX, loc.gpr());
+            }
+        }
+
+        self.values.insert(value, (new_loc, ty));
+        value
+    }
+
     pub fn ret(&mut self, x: Value) {
         let loc = self.get_value_loc(x);
 
@@ -292,23 +449,21 @@ impl Function {
                     .load_mem(ty.to_machine(), Reg::Gpr(RAX), Mem::Local(loc.off()));
             }
         }
-        self.epilog();
+
+        self.jump("<__epilog__>");
+
     }
 
-    pub fn fix_prolog(&mut self) {
-        /*let reloc = &self.prolog;
-        let bits: [u8;4] = unsafe {::std::mem::transmute(self.stack_offset)};
-
-        let mut pc = 0;
-        for i in reloc.at..reloc.to {
-            self.asm.data[i] = bits[pc];
-            pc += 1;
-        }*/
+    pub fn finalize(&mut self) {
+        let l = self.labels.get("<__epilog__>").unwrap();
+        self.asm.bind_label(*l);
+        emit_popq_reg(&mut self.asm, RBP);
+        self.asm.emit(0xc3);
     }
 
-    pub fn call(&mut self, fname: &str, args: &[Value],ret: Type) -> Value {
+    pub fn call(&mut self, fname: &str, args: &[Value], ret: Type) -> Value {
         let value = Value::new(self.value_id);
-        self.value_types.insert(value,ret);
+
         self.value_id += 1;
 
         let mut used = vec![];
@@ -329,7 +484,7 @@ impl Function {
                     } else {
                         self.asm.store_mem(ty.to_machine(),Mem::Local(loc.off()),Reg::Gpr(ARG_GPR[pc]));
                     }*/
-                    
+
                     temp.push((loc, Reg::Gpr(ARG_GPR[pc]), ty));
                     if pc != ARG_GPR.len() {
                         pc += 1;
@@ -356,59 +511,70 @@ impl Function {
             if loc.is_gpr() {
                 emit_pushq_reg(&mut self.asm, loc.gpr());
             } else {
-                self.asm.push_freg(loc.fpr());
+                unimplemented!()
+
             }
         }
 
-        for (loc,to,ty) in register_args.iter() {
+        for (loc, to, ty) in register_args.iter() {
             if !ty.is_float() {
                 if loc.is_gpr() {
-                    emit_mov_reg_reg(&mut self.asm, ty.x64(), loc.gpr(),to.reg());
+                    emit_mov_reg_reg(&mut self.asm, ty.x64(), loc.gpr(), to.reg());
                 } else {
-                    self.asm.load_mem(ty.to_machine(),*to,Mem::Local(loc.off()));
+                    self.asm
+                        .load_mem(ty.to_machine(), *to, Mem::Local(loc.off()));
                 }
             } else {
                 if loc.is_fpr() {
                     if ty.x64() == 0 {
                         movss(&mut self.asm, to.freg(), loc.fpr());
                     } else {
-                        movsd(&mut self.asm,to.freg(),loc.fpr());
+                        movsd(&mut self.asm, to.freg(), loc.fpr());
                     }
                 } else {
-                    self.asm.load_mem(ty.to_machine(),*to,Mem::Local(loc.off()));
+                    self.asm
+                        .load_mem(ty.to_machine(), *to, Mem::Local(loc.off()));
                 }
             }
         }
 
-        self.asm.load_int_const(MachineMode::Ptr,RAX,0);
+        self.asm.load_int_const(MachineMode::Ptr, RAX, 0);
         self.relocs.push(Reloc {
             global_name: fname.to_owned(),
             at: self.asm.pos() - 8,
             to: self.asm.pos(),
         });
         emit_callq_reg(&mut self.asm, RAX);
-        let loc = self.allocate_reg(ret);
+        if ret != Type::Void {
+            let loc = self.allocate_reg(ret);
 
-        if loc.is_fpr() {
-            if ret.x64() == 0 {
-                movss(&mut self.asm, loc.fpr(), XMM0);
+            if loc.is_fpr() {
+                if ret.x64() == 0 {
+                    movss(&mut self.asm, loc.fpr(), XMM0);
+                } else {
+                    movsd(&mut self.asm, loc.fpr(), XMM0);
+                }
+            } else if loc.is_gpr() {
+                emit_mov_reg_reg(&mut self.asm, ret.x64(), RAX, loc.gpr());
             } else {
-                movsd(&mut self.asm,loc.fpr(),XMM0);
+                if ret.is_float() {
+                    self.asm.store_mem(
+                        ret.to_machine(),
+                        Mem::Local(loc.off()),
+                        Reg::Float(loc.fpr()),
+                    );
+                } else {
+                    self.asm.store_mem(
+                        ret.to_machine(),
+                        Mem::Local(loc.off()),
+                        Reg::Gpr(loc.gpr()),
+                    );
+                }
             }
-        } else if loc.is_gpr() {
-            emit_mov_reg_reg(&mut self.asm, ret.x64(), RAX, loc.gpr());
-        } else {
-            if ret.is_float() {
-                self.asm.store_mem(ret.to_machine(),Mem::Local(loc.off()),Reg::Float(loc.fpr()));
-            } else {
-                self.asm.store_mem(ret.to_machine(),Mem::Local(loc.off()),Reg::Gpr(loc.gpr()));
-            }
+
+
+            self.values.insert(value, (loc, ret));
         }
-
-        self.values.insert(value,loc);
-
-
         value
-
     }
 }

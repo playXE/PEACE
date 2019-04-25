@@ -1,30 +1,31 @@
+extern crate peace;
+
+use peace::module::*;
+use peace::types::Type;
+
+
 use capstone::prelude::*;
 use std::mem;
 
-use peak_compiler::module::*;
-use peak_compiler::types::*;
-
 fn main() {
-    
     let mut module = Module::new();
+
+    module.declare_function("printf", Linkage::Import);
     module.declare_function("main", Linkage::Local);
-    module.declare_function("puts",Linkage::Import);
 
 
-    let func = module.get_function("main");
-    func.prolog();
-    let str = func.iconst(I64,b"Hello,world!\0".as_ptr() as i64);
-    let ret = func.call("puts",&[str],I32);
-    func.ret(ret);
-
-
-    func.fix_prolog();
-
+    let builder = module.get_function("main");
+    let int = Type::I32;
+    let v0 = builder.iconst(int, 4);
+    let v1 = builder.iconst(int, 5);
+    let v2 = builder.iadd(v0, v1);
+    builder.ret(v2);
+    builder.finalize();
     module.finish();
 
-    let (ptr, size) = module.get_finalized_data("main");
+    let (data, size) = module.get_finalized_data("main");
 
-    let mut cs: Capstone = Capstone::new()
+    let cs: Capstone = Capstone::new()
         .x86()
         .mode(arch::x86::ArchMode::Mode64)
         .syntax(arch::x86::ArchSyntax::Intel)
@@ -32,7 +33,7 @@ fn main() {
         .build()
         .unwrap();
 
-    let slice = unsafe { ::std::slice::from_raw_parts(ptr, size) };
+    let slice = unsafe { ::std::slice::from_raw_parts(data, size) };
 
     let ins = cs.disasm_all(slice, 0);
 
@@ -40,8 +41,8 @@ fn main() {
         println!("{}", i);
     }
 
-    let ptr = module.get_finalized_function("main");
 
-    let f: fn() -> i32 = unsafe { mem::transmute(ptr) };
+    let f: fn() -> i64 = unsafe { mem::transmute(data) };
     println!("{}", f());
+
 }

@@ -1,36 +1,45 @@
-#[derive(Clone, Debug, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
-pub struct Type(u32);
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum Type {
+    I8,
+    I32,
+    I64,
 
-pub const I32: Type = Type(0);
-pub const I64: Type = Type(2);
-pub const F32: Type = Type(3);
-pub const F64: Type = Type(4);
-pub const I8: Type = Type(5);
+    F32,
+    F64,
 
-use crate::compiler::MachineMode;
+    Pointer,
+    Void,
+}
+
+use crate::backend::MachineMode;
 
 impl Type {
     pub fn to_machine(&self) -> MachineMode {
-        match *self {
-            I32 => MachineMode::Int32,
-            I64 => MachineMode::Int64,
-            F32 => MachineMode::Float32,
-            F64 => MachineMode::Float64,
-            I8 => MachineMode::Int8,
+        use MachineMode::*;
+        use Type::*;
+        match self {
+            I8 => Int8,
+            I32 => Int32,
+            I64 => Int64,
+            Pointer => Ptr,
+            F32 => Float32,
+            F64 => Float64,
             _ => unreachable!(),
         }
     }
 
-    pub fn is_float(&self) -> bool {
-        match *self {
-            F32 | F64 => true,
-            _ => false,
-        }
-    }
     pub fn x64(&self) -> u8 {
-        match *self {
-            F64 | I64 => 1,
-            _ => 0,
-        }
+        if *self == Type::I64 || *self == Type::F64 {1} else {0}
+    }
+    pub fn is_float(&self) -> bool {
+        if *self == Type::F32 || *self == Type::F64 {true} else {false}
+    }
+}
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
+pub struct Value(pub u32);
+
+impl Value {
+    pub fn new(v: u32) -> Value {
+        Value(v)
     }
 }

@@ -18,22 +18,37 @@ pub enum Register {
     R14 = 14,
     R15 = 15,
     RIP = 16,
+    /// Signals an illegal register.
+    kNoRegister = -1,
 }
 
 impl Register {
+    #[inline]
     pub fn is_basic_reg(self) -> bool {
         self == RAX || self == RBX || self == RCX || self == RDX
     }
+    #[inline]
     pub fn msb(self) -> u8 {
         assert!(self != RIP);
 
         (self as u8 >> 3) & 0x01
     }
 
+    #[inline]
     pub fn and7(self) -> u8 {
         assert!(self != RIP);
 
         self as u8 & 0x07
+    }
+
+    #[inline]
+    pub fn high_bit(&self) -> u8 {
+        self.msb()
+    }
+
+    #[inline]
+    pub fn low_bit(&self) -> u8 {
+        self.and7()
     }
 }
 
@@ -58,19 +73,36 @@ pub enum XMMRegister {
     XMM13 = 13,
     XMM14 = 14,
     XMM15 = 15,
+    kNumberOfXmmRegisters = 16,
+    kNoXmmRegister = -1, // Signals an illegal register.
 }
 
 impl XMMRegister {
+    #[inline]
     pub fn msb(self) -> u8 {
         //assert!(self != RIP);
 
         (self as u8 >> 3) & 0x01
     }
-
+    #[inline]
     pub fn and7(self) -> u8 {
         //assert!(self != RIP);
 
         self as u8 & 0x07
+    }
+
+    #[inline]
+    pub fn high_bit(&self) -> u8 {
+        self.msb()
+    }
+
+    #[inline]
+    pub fn low_bit(&self) -> u8 {
+        self.and7()
+    }
+    #[inline]
+    pub fn from_gp(reg: Register) -> XMMRegister {
+        unsafe { std::mem::transmute(reg) }
     }
 }
 
@@ -78,6 +110,19 @@ pub use self::XMMRegister::*;
 
 pub type FpuRegister = XMMRegister;
 pub const FpuTMP: FpuRegister = XMM0;
+
+#[derive(Clone, Debug, PartialEq, Eq, Copy, PartialOrd, Ord)]
+#[repr(i32)]
+pub enum RexBits {
+    REX_NONE = 0,
+    REX_B = 1 << 0,
+    REX_X = 1 << 1,
+    REX_R = 1 << 2,
+    REX_W = 1 << 3,
+    REX_PREFIX = 1 << 6,
+}
+
+pub use self::RexBits::*;
 
 pub const TMP: Register = R11;
 pub const TMP2: Register = R10;
@@ -87,10 +132,8 @@ pub const SPREG: Register = RSP;
 /// Frame pointer register
 pub const FPREG: Register = RBP;
 
-pub const kExceptionObjectReg: Register = RAX;
-pub const kStackTraceObjectReg: Register = RDX;
-
 #[derive(Clone, Debug, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
+#[repr(C)]
 pub enum Reg {
     Gpr(Register),
     Float(XMMRegister),
@@ -110,4 +153,12 @@ impl Reg {
             _ => panic!(""),
         }
     }
+}
+
+pub fn reg_gpr(reg: Register) -> Reg {
+    Reg::Gpr(reg)
+}
+
+pub fn reg_fpr(reg: XMMRegister) -> Reg {
+    Reg::Float(reg)
 }
