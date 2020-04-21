@@ -1,3 +1,4 @@
+pub mod constant_folding;
 pub mod loopanalysis;
 pub mod param_load;
 pub mod peephole;

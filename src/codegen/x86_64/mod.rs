@@ -1,4 +1,5 @@
 pub mod callconv;
+pub mod emit_gas;
 pub mod lower_function;
 use super::*;
 use crate::ir::*;

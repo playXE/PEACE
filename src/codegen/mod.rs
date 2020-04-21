@@ -4,8 +4,9 @@ pub mod x86_64;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::*;
 pub mod frame;
-
 use crate::ir::*;
+use byteorder::WriteBytesExt;
+use byteorder::{ByteOrder, LittleEndian};
 
 /// RegGroup describes register class
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -76,4 +77,20 @@ pub fn sequential_layout(tys: &[Type]) -> (usize, usize, Vec<usize>) {
     }
     let size = crate::util::math::align_up(cur, struct_align);
     (size, struct_align, offsets)
+}
+
+/// returns bit representations for f32
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub fn f32_to_raw(val: f32) -> u32 {
+    let mut ret = vec![];
+    ret.write_f32::<LittleEndian>(val).unwrap();
+    LittleEndian::read_uint(&mut ret, 4) as u32
+}
+
+/// returns bit representations for f64
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub fn f64_to_raw(val: f64) -> u64 {
+    let mut ret = vec![];
+    ret.write_f64::<LittleEndian>(val).unwrap();
+    LittleEndian::read_uint(&mut ret, 8)
 }

@@ -65,6 +65,22 @@ pub enum Instruction {
     RawIntBinary(IntBinaryOperation, Box<Node>, Box<Node>),
     #[display(fmt = "Float.{:?} {} {}", _0, _1, _2)]
     RawFloatBinary(FloatBinaryOperation, Box<Node>, Box<Node>),
+    #[display(fmt = "{} = Int.{:?} {} {}", _1, _0, _2, _3)]
+    IntCmp(IntCC, Box<Node>, Box<Node>, Box<Node>),
+    #[display(fmt = "{} = Float.{:?} {} {}", _1, _0, _2, _3)]
+    FloatCmp(FloatCC, Box<Node>, Box<Node>, Box<Node>),
+    #[display(fmt = "icmp {} {}", _0, _1)]
+    RawIntCmp(Box<Node>, Box<Node>),
+    #[display(fmt = "seti.{} {:?}", _0, _1)]
+    SetI(Box<Node>, IntCC),
+    #[display(fmt = "setf.{} {:?}", _0, _1)]
+    SetF(Box<Node>, FloatCC),
+    #[display(fmt = "fcmp {} {}", _0, _1)]
+    RawFloatCmp(Box<Node>, Box<Node>),
+    #[display(fmt = "{} = load_function {}", _0, _1)]
+    LoadFunction(Box<Node>, String),
+    #[display(fmt = "{} = load_data {}", _0, _1)]
+    LoadData(Box<Node>, String),
 }
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum IntBinaryOperation {
@@ -120,6 +136,12 @@ pub enum Node {
 }
 
 impl Node {
+    pub fn is_block(&self) -> bool {
+        match self {
+            Node::Operand(Operand::Block(_)) => true,
+            _ => false,
+        }
+    }
     pub fn try_replace_reg(&mut self, from: usize, to: usize) -> bool {
         match self {
             Self::Operand(x) => match x {
@@ -560,6 +582,13 @@ impl Instruction {
             Instruction::LoadImm(dst, _, _) => {
                 r!(dst);
             }
+            Instruction::SetF(d, _) => r!(d),
+            Instruction::SetI(d, _) => r!(d),
+            Instruction::RawIntCmp(x, y) => r!(x y),
+            Instruction::RawFloatCmp(x, y) => r!(x y),
+            Instruction::LoadData(d, _) | Instruction::LoadFunction(d, _) => r!(d),
+            Instruction::IntCmp(_, x, y, z) => r!(x y z),
+            Instruction::FloatCmp(_, x, y, z) => r!(x y z),
             Instruction::RawIntBinary(_, x, y) => r!(x y),
             Instruction::RawFloatBinary(_, x, y) => r!(x y),
             Instruction::Move(x, y) => r!(x y),
@@ -612,8 +641,14 @@ impl Instruction {
     pub fn get_defs(&self) -> Vec<usize> {
         let mut set = HashSet::new();
         match self {
-            Instruction::LoadImm(dst, _, _) | Instruction::LoadParam(dst, _, _) => {
+            Instruction::LoadImm(dst, _, _)
+            | Instruction::LoadParam(dst, _, _)
+            | Instruction::LoadFunction(dst, _)
+            | Instruction::LoadData(dst, _) => {
                 set.insert(dst.any_reg_id());
+            }
+            Instruction::SetF(d, _) | Instruction::SetI(d, _) => {
+                set.insert(d.any_reg_id());
             }
             Instruction::Move(dst, _) => {
                 if let Node::Operand(Operand::Register(_, _)) = &**dst {
@@ -783,16 +818,25 @@ pub const UINT64_TYPE: Type = Type::UInt64;
 pub const MACHINE_ID_START: usize = 0;
 pub const MACHINE_ID_END: usize = 200;
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Attr {
+    Naked,
+    Inline,
+    InlineAlways,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionSignature {
+    pub attrs: Vec<Attr>,
     pub ret: Type,
     pub params: Vec<Type>,
     pub name: String,
 }
 
 impl FunctionSignature {
-    pub fn new(name: &str, t: &[Type], r: Type) -> Self {
+    pub fn new(attrs: &[Attr], name: &str, t: &[Type], r: Type) -> Self {
         Self {
+            attrs: attrs.to_owned(),
             ret: r,
             params: t.to_owned(),
             name: name.to_owned(),
@@ -820,13 +864,14 @@ impl LIRFunctionBuilder {
         Box::new((*crate::codegen::ALL_GPRS[r]).clone())
     }
 
-    pub fn new(name: &str, params: &[Type], ret: Type) -> Self {
+    pub fn new(attrs: &[Attr], name: &str, params: &[Type], ret: Type) -> Self {
         let mut this = Self {
             variables: LinkedHashMap::new(),
             func: LIRFunction::new(FunctionSignature {
                 params: params.clone().to_vec(),
                 ret,
                 name: name.to_owned(),
+                attrs: attrs.to_owned(),
             }),
             vregs: MACHINE_ID_END,
             ret,
@@ -882,7 +927,7 @@ impl LIRFunctionBuilder {
         r
     }
     pub fn int_binary(&mut self, op: IntBinaryOperation, x: Box<Node>, y: Box<Node>) -> Box<Node> {
-        let r = self.new_virtual(Self::ty_info(&*x));
+        let r = self.new_virtual(self.type_of(&*x));
         self.emit(Instruction::IntBinary(op, r.clone(), x, y));
         r
     }
@@ -905,8 +950,98 @@ impl LIRFunctionBuilder {
         ));
         r
     }
+
+    pub fn jump_icmp(
+        &mut self,
+        cmp: IntCC,
+        x: Box<Node>,
+        y: Box<Node>,
+        if_nzero: &Box<Node>,
+        if_zero: &Box<Node>,
+    ) {
+        assert!(if_nzero.is_block());
+        assert!(if_zero.is_block());
+        self.emit(Instruction::JumpCondInt(
+            cmp,
+            x,
+            y,
+            if_nzero.clone(),
+            if_zero.clone(),
+        ));
+    }
+    pub fn jump_fcmp(
+        &mut self,
+        cmp: FloatCC,
+        x: Box<Node>,
+        y: Box<Node>,
+        if_nzero: &Box<Node>,
+        if_zero: &Box<Node>,
+    ) {
+        assert!(if_nzero.is_block());
+        assert!(if_zero.is_block());
+        self.emit(Instruction::JumpCondFloat(
+            cmp,
+            x,
+            y,
+            if_nzero.clone(),
+            if_zero.clone(),
+        ));
+    }
+    pub fn type_of(&self, node: &Node) -> Type {
+        match node {
+            Node::Operand(operand) => match operand {
+                Operand::Immediate8(_) => Type::Int8,
+                Operand::Immediate16(_) => Type::Int16,
+                Operand::Immediate32(_) => Type::Int32,
+                Operand::Immediate64(_) => Type::Int64,
+                Operand::Label(_) => PTR_TYPE,
+                Operand::LIRFunction(_) => PTR_TYPE,
+                Operand::Memory(_) => PTR_TYPE,
+                Operand::Register(_, t) => *t,
+                Operand::Symbol(_) => PTR_TYPE,
+                Operand::Block(_) => PTR_TYPE,
+                _ => unreachable!(),
+            },
+            _ => unimplemented!(),
+        }
+    }
+    pub fn icmp(&mut self, cmp: IntCC, lhs: Box<Node>, rhs: Box<Node>) -> Box<Node> {
+        let value = self.new_virtual(Type::Int8);
+        self.emit(Instruction::IntCmp(cmp, value.clone(), lhs, rhs));
+        value
+    }
+    pub fn fcmp(&mut self, cmp: FloatCC, lhs: Box<Node>, rhs: Box<Node>) -> Box<Node> {
+        let value = self.new_virtual(Type::Int8);
+        self.emit(Instruction::FloatCmp(cmp, value.clone(), lhs, rhs));
+        value
+    }
     pub fn return_(&mut self, val: Box<Node>) {
         self.emit(Instruction::Return(val));
+    }
+
+    pub fn create_block(&mut self) -> Box<Node> {
+        let block = BasicBlock::new(self.func.code.len(), vec![]);
+        let id = block.id;
+        self.func.code.push(block);
+        Box::new(Node::Operand(Operand::Block(id)))
+    }
+
+    pub fn switch_to_block(&mut self, block: &Box<Node>) {
+        match &**block {
+            Node::Operand(Operand::Block(id)) => {
+                self.current_block = *id;
+            }
+            _ => panic!("target is not a block"),
+        }
+    }
+
+    pub fn jump(&mut self, block: &Box<Node>) {
+        match &**block {
+            Node::Operand(Operand::Block(id)) => {
+                self.emit(Instruction::Jump(block.clone()));
+            }
+            _ => panic!("target is not a block"),
+        }
     }
 
     pub fn finish(mut self) -> LIRFunction {
