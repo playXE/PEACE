@@ -1,5 +1,5 @@
 [package]
-name = "codegen"
+name = "peace"
 version = "0.1.0"
 authors = ["aprokurov"]
 edition = "2018"
@@ -9,3 +9,6 @@ edition = "2018"
 [dependencies]
 string-interner = "0.7.1"
 hashlink = "0.5"
+lazy_static = "1.4"
+log = "0.4"
+derive_more = "0.99"
