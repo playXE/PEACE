@@ -26,11 +26,14 @@ pub struct LoopAnalysisResult {
 
 pub struct LoopAnalysisPass;
 
-impl FunctionPass for LoopAnalysisPass {
+impl<'a> FunctionPass<'a> for LoopAnalysisPass {
     type Output = ();
     type Err = ();
-    fn run(&mut self, cf: &mut LIRFunction) -> Result<Self::Output, Self::Err> {
+    fn run<'b: 'a>(&mut self, cf: &'b mut LIRFunction) -> Result<Self::Output, Self::Err> {
         let prologue = 0;
+        if cf.cfg.is_none() {
+            cf.build_cfg();
+        }
         let dominators = compute_dominators(&cf, &cf.cfg.as_ref().unwrap());
         //trace!("---dominators---");
         //trace!("{:?}", dominators);

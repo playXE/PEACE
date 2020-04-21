@@ -24,12 +24,12 @@ pub enum Instruction {
     JumpCondFloat(FloatCC, Box<Node>, Box<Node>, Box<Node>, Box<Node>),
     /// %value = call %function <arguments>
     #[display(fmt = "call_indirect {} {} <args not displayed>", _0, _1)]
-    CallIndirect(Box<Node>, Box<Node>, Vec<Box<Node>>),
+    CallIndirect(Box<Node>, Box<Node>, Vec<Box<Node>>, FunctionSignature),
     /// %value = call $function <arguments>
-    #[display(fmt = "call {} {} <args not displayed>", _0, _1)]
-    Call(Box<Node>, Box<Node>, Vec<Box<Node>>),
+    #[display(fmt = "{} = call {} <args not displayed>", _0, _1)]
+    Call(Box<Node>, Box<Node>, Vec<Box<Node>>, FunctionSignature),
     #[display(fmt = "tcall {} <args not displayed>", _0)]
-    TailCall(Box<Node>, Vec<Box<Node>>),
+    TailCall(Box<Node>, Vec<Box<Node>>, FunctionSignature),
     /// Load value at offset.
     ///
     /// %value = %ptr + %offset * sizeof(type)
@@ -57,6 +57,14 @@ pub enum Instruction {
     Return(Box<Node>),
     #[display(fmt = "{} = load_param.{} {} ", _0, _2, _1)]
     LoadParam(Box<Node>, usize, Type),
+    #[display(fmt = "{} = call {}", _0, _1)]
+    RawCall(Box<Node>, Box<Node>),
+    #[display(fmt = "tcall {}", _0)]
+    RawTCall(Box<Node>),
+    #[display(fmt = "Int.{:?} {} {}", _0, _1, _2)]
+    RawIntBinary(IntBinaryOperation, Box<Node>, Box<Node>),
+    #[display(fmt = "Float.{:?} {} {}", _0, _1, _2)]
+    RawFloatBinary(FloatBinaryOperation, Box<Node>, Box<Node>),
 }
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum IntBinaryOperation {
@@ -166,9 +174,9 @@ pub enum Operand {
     #[display(fmt = "{}", _0)]
     Float32(u32),
     #[display(fmt = "{:?}", _0)]
-    Symbol(Sym),
+    Symbol(String),
     #[display(fmt = "{:?}", _0)]
-    LIRFunction(Sym),
+    LIRFunction(String),
     #[display(fmt = "$bb{:?}", _0)]
     Block(usize),
     #[display(fmt = "$lbl{:?}", _0)]
@@ -245,7 +253,7 @@ impl BasicBlock {
             }
             Instruction::Jump(x) => [Some(x), None],
             Instruction::Return(_) => [None, None],
-            Instruction::TailCall(_, _) => [None, None],
+            Instruction::TailCall(_, _, _) => [None, None],
             _ => panic!("Terminator not found in {:#?}", self),
         }
     }
@@ -255,7 +263,7 @@ impl BasicBlock {
         let last_ins = &mut self.instructions[i];
         match &mut *last_ins {
             Instruction::Return(_) => false,
-            Instruction::TailCall(_, _) => false,
+            Instruction::TailCall(_, _, _) => false,
             Instruction::Jump(x) => {
                 if *x == from {
                     *x = to;
@@ -396,7 +404,7 @@ pub struct LIRFunction {
     pub frame: crate::codegen::frame::Frame,
     pub loop_analysis: Option<crate::pass::loopanalysis::LoopAnalysisResult>,
     pub values: LinkedHashMap<usize, Box<Node>>,
-    pub functions: LinkedHashMap<Sym, FunctionSignature>,
+    pub functions: LinkedHashMap<String, FunctionSignature>,
     pub data: LinkedHashSet<Sym>,
 }
 
@@ -411,6 +419,13 @@ impl LIRFunction {
             functions: LinkedHashMap::new(),
             data: LinkedHashSet::new(),
             values: LinkedHashMap::new(),
+        }
+    }
+    fn init_machine_regs_for_func(&mut self) {
+        use crate::codegen::*;;
+        for reg in ALL_MACHINE_REGS.values() {
+            let id = reg.any_reg_id();
+            self.values.insert(id, Box::new((**reg).clone()));
         }
     }
     pub fn print_to_stdout(&self) {
@@ -518,6 +533,20 @@ impl LIRFunction {
 }
 use std::collections::HashSet;
 impl Instruction {
+    pub fn branch_targets(&self) -> [Option<&Box<Node>>; 2] {
+        let last_ins = self;
+        match &*last_ins {
+            Instruction::Select(_, if_nzero, if_zero) => [Some(if_nzero), Some(if_zero)],
+            Instruction::JumpCondInt(_, _, _, if_nzero, if_zero)
+            | Instruction::JumpCondFloat(_, _, _, if_nzero, if_zero) => {
+                [Some(if_nzero), Some(if_zero)]
+            }
+            Instruction::Jump(x) => [Some(x), None],
+            Instruction::Return(_) => [None, None],
+            Instruction::TailCall(_, _, _) => [None, None],
+            _ => unreachable!(),
+        }
+    }
     pub fn replace_reg(&mut self, from: usize, to: usize) {
         macro_rules! r {
             ($d: expr) => {
@@ -531,6 +560,8 @@ impl Instruction {
             Instruction::LoadImm(dst, _, _) => {
                 r!(dst);
             }
+            Instruction::RawIntBinary(_, x, y) => r!(x y),
+            Instruction::RawFloatBinary(_, x, y) => r!(x y),
             Instruction::Move(x, y) => r!(x y),
             Instruction::Select(x, y, z) => r!(x y z),
             Instruction::FloatBinary(_, x, y, z) => r!(x y z),
@@ -538,19 +569,26 @@ impl Instruction {
             Instruction::Jump(x) => r!(x),
             Instruction::JumpCondInt(_, x, y, z, w) => r!(x y z w),
             Instruction::JumpCondFloat(_, x, y, z, w) => r!(x y z w),
-            Instruction::CallIndirect(x, y, args) => {
+            Instruction::CallIndirect(x, y, args, _) => {
                 r!(x y);
                 for r in args.iter_mut() {
                     r!(r);
                 }
             }
-            Instruction::Call(r, _, args) => {
+            Instruction::RawCall(dst, f) => {
+                r!(dst);
+                r!(f);
+            }
+            Instruction::RawTCall(f) => {
+                r!(f);
+            }
+            Instruction::Call(r, _, args, _) => {
                 r!(r);
                 for r in args.iter_mut() {
                     r!(r);
                 }
             }
-            Instruction::TailCall(r, args) => {
+            Instruction::TailCall(r, args, _) => {
                 r!(r);
                 for r in args.iter_mut() {
                     r!(r);
@@ -582,7 +620,10 @@ impl Instruction {
                     set.insert(dst.any_reg_id());
                 }
             }
-            Instruction::Call(val, _, _) | Instruction::CallIndirect(val, _, _) => {
+            Instruction::RawCall(def, _) => {
+                set.insert(def.any_reg_id());
+            }
+            Instruction::Call(val, _, _, _) | Instruction::CallIndirect(val, _, _, _) => {
                 set.insert(val.any_reg_id());
             }
             Instruction::Load(dst, _, _, _) => {
@@ -597,6 +638,7 @@ impl Instruction {
             Instruction::Cast(dst, _, _) | Instruction::Reinterpret(dst, _, _) => {
                 set.insert(dst.any_reg_id());
             }
+            Instruction::RawFloatBinary(_, x, y) | Instruction::RawIntBinary(_, x, y) => {}
             _ => (),
         }
         set.iter().copied().collect()
@@ -605,12 +647,23 @@ impl Instruction {
     pub fn get_uses(&self) -> Vec<usize> {
         let mut set = HashSet::new();
         match self {
-            Instruction::Call(_, c, args) | Instruction::CallIndirect(_, c, args) => {
-                if let Instruction::CallIndirect(_, _, _) = self {
+            Instruction::RawFloatBinary(_, x, y) | Instruction::RawIntBinary(_, x, y) => {
+                set.insert(x.any_reg_id());
+                if let Node::Operand(Operand::Register(r, _)) = &**y {
+                    set.insert(*r);
+                }
+            }
+            Instruction::Call(_, c, args, _) | Instruction::CallIndirect(_, c, args, _) => {
+                if let Instruction::CallIndirect(_, _, _, _) = self {
                     set.insert(c.any_reg_id());
                 }
                 for arg in args.iter() {
                     set.insert(arg.any_reg_id());
+                }
+            }
+            Instruction::RawCall(_, f) | Instruction::RawTCall(f) => {
+                if let Node::Operand(Operand::Register(r, _)) = &**f {
+                    set.insert(*r);
                 }
             }
             Instruction::Jump(node) => match &**node {
@@ -639,7 +692,7 @@ impl Instruction {
                     _ => (),
                 }
             }
-            Instruction::TailCall(x, args) => {
+            Instruction::TailCall(x, args, _) => {
                 match &**x {
                     Node::Operand(Operand::VirtualRegister(r, _))
                     | Node::Operand(Operand::Register(r, _)) => {
@@ -686,7 +739,13 @@ impl Instruction {
                     }
                     _ => (),
                 };
-                set.insert(ptr.any_reg_id());
+                match &**ptr {
+                    Node::Operand(Operand::VirtualRegister(r, _))
+                    | Node::Operand(Operand::Register(r, _)) => {
+                        set.insert(*r);
+                    }
+                    _ => (),
+                };
                 set.insert(value.any_reg_id());
             }
             Instruction::Move(_, x) => {
@@ -700,6 +759,15 @@ impl Instruction {
             }
             Instruction::Return(x) => {
                 set.insert(x.any_reg_id());
+            }
+            Instruction::IntBinary(_, x, y, z) | Instruction::FloatBinary(_, x, y, z) => {
+                if let Node::Operand(Operand::Register { .. }) = &**y {
+                    set.insert(y.any_reg_id());
+                }
+                if let Node::Operand(Operand::Register { .. }) = &**z {
+                    set.insert(z.any_reg_id());
+                }
+                //set.insert(x.any_reg_id());
             }
             _ => (),
         }
@@ -715,10 +783,21 @@ pub const UINT64_TYPE: Type = Type::UInt64;
 pub const MACHINE_ID_START: usize = 0;
 pub const MACHINE_ID_END: usize = 200;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionSignature {
     pub ret: Type,
     pub params: Vec<Type>,
     pub name: String,
+}
+
+impl FunctionSignature {
+    pub fn new(name: &str, t: &[Type], r: Type) -> Self {
+        Self {
+            ret: r,
+            params: t.to_owned(),
+            name: name.to_owned(),
+        }
+    }
 }
 
 pub struct LIRFunctionBuilder {
@@ -754,8 +833,9 @@ impl LIRFunctionBuilder {
             params: params.to_vec(),
             current_block: 0,
         };
-        this.func.code.push(BasicBlock::new(0, vec![]));
 
+        this.func.code.push(BasicBlock::new(0, vec![]));
+        this.func.init_machine_regs_for_func();
         this
     }
     fn new_virtual(&mut self, ty: Type) -> Box<Node> {
@@ -769,6 +849,23 @@ impl LIRFunctionBuilder {
     }
     fn emit(&mut self, ins: Instruction) {
         self.func.code[self.current_block].instructions.push(ins);
+    }
+
+    pub fn call(&mut self, name: &str, args: &[Box<Node>]) -> Box<Node> {
+        let sig = self.func.functions.get(name).unwrap().clone();
+        let r = self.new_virtual(sig.ret);
+        let value = Box::new(Node::Operand(Operand::Symbol(name.to_owned())));
+        self.emit(Instruction::Call(
+            r.clone(),
+            value,
+            args.to_owned(),
+            sig.clone(),
+        ));
+        r
+    }
+
+    pub fn add_function(&mut self, sig: FunctionSignature) {
+        self.func.functions.insert(sig.name.clone(), sig);
     }
     pub fn ty_info(r: &Node) -> Type {
         match r {
@@ -799,6 +896,15 @@ impl LIRFunctionBuilder {
         ));
         r
     }
+    pub fn load_imm32(&mut self, x: i32) -> Box<Node> {
+        let r = self.new_virtual(Type::Int32);
+        self.emit(Instruction::LoadImm(
+            r.clone(),
+            Box::new(Node::Operand(Operand::Immediate32(x))),
+            Type::Int32,
+        ));
+        r
+    }
     pub fn return_(&mut self, val: Box<Node>) {
         self.emit(Instruction::Return(val));
     }
@@ -809,6 +915,9 @@ impl LIRFunctionBuilder {
 }
 
 impl Type {
+    pub fn int_length(&self) -> usize {
+        self.size() * 8
+    }
     pub fn size(&self) -> usize {
         match self {
             Type::Float32 | Type::Int32 | Type::UInt32 => std::mem::size_of::<u32>(),

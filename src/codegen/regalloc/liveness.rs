@@ -384,6 +384,24 @@ pub fn build_interference_graph_chaitin_briggs(cf: &mut LIRFunction) -> Interfer
                     let reg_id = c(reg_id);
                     ig.new_node(reg_id, Copy, loop_depth, cf);
                 }
+            } else if let Instruction::RawIntBinary { .. } = i {
+                for reg_id in i.get_defs() {
+                    let reg_id = c(reg_id);
+                    ig.new_node(reg_id, Copy, loop_depth, cf);
+                }
+                for reg_id in i.get_uses() {
+                    let reg_id = c(reg_id);
+                    ig.new_node(reg_id, Copy, loop_depth, cf);
+                }
+            } else if let Instruction::RawFloatBinary { .. } = i {
+                for reg_id in i.get_defs() {
+                    let reg_id = c(reg_id);
+                    ig.new_node(reg_id, Copy, loop_depth, cf);
+                }
+                for reg_id in i.get_uses() {
+                    let reg_id = c(reg_id);
+                    ig.new_node(reg_id, Copy, loop_depth, cf);
+                }
             } else {
                 for reg_id in i.get_defs() {
                     let reg_id = c(reg_id);

@@ -5,10 +5,10 @@ use hashlink::*;
 use std::collections::{BTreeSet, HashSet};
 pub struct SimplifyCFGPass;
 
-impl FunctionPass for SimplifyCFGPass {
+impl<'a> FunctionPass<'a> for SimplifyCFGPass {
     type Output = ();
     type Err = ();
-    fn run(&mut self, f: &mut LIRFunction) -> Result<Self::Output, Self::Err> {
+    fn run<'b: 'a>(&mut self, f: &'b mut LIRFunction) -> Result<Self::Output, Self::Err> {
         let code = &mut f.code;
         let n_basic_blocks = code.len();
         let mut out_edges: Vec<HashSet<usize>> = vec![HashSet::new(); n_basic_blocks];

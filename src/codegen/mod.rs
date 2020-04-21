@@ -19,6 +19,12 @@ pub enum RegGroup {
 }
 
 impl RegGroup {
+    pub fn from_ty(t: Type) -> Option<Self> {
+        match t {
+            Type::Float32 | Type::Float64 => Some(Self::FPR),
+            _ => Some(Self::GPR),
+        }
+    }
     pub fn from_node(node: &Node) -> Option<Self> {
         match node {
             Node::Operand(op) => match op {
@@ -55,4 +61,19 @@ impl RegGroup {
             _ => None,
         }
     }
+}
+
+pub fn sequential_layout(tys: &[Type]) -> (usize, usize, Vec<usize>) {
+    let mut offsets = vec![];
+    let mut cur = 0;
+    let mut struct_align = 1;
+    for ty in tys.iter() {
+        let align = ty.align();
+        struct_align = num::integer::lcm(struct_align, align);
+        cur = crate::util::math::align_up(cur, align);
+        offsets.push(cur);
+        cur += ty.size();
+    }
+    let size = crate::util::math::align_up(cur, struct_align);
+    (size, struct_align, offsets)
 }

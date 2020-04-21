@@ -1,3 +1,5 @@
+pub mod callconv;
+pub mod lower_function;
 use super::*;
 use crate::ir::*;
 use hashlink::LinkedHashMap;
@@ -439,5 +441,33 @@ pub fn get_color_for_precolored(id: usize) -> usize {
     } else {
         // we do not have alias for FPRs
         id
+    }
+}
+
+/// returns P<Value> for a register ID of its alias of the given length
+/// panics if the ID is not a machine register ID
+pub fn get_alias_for_length(id: usize, length: usize) -> Rc<Node> {
+    if id < FPR_ID_START {
+        let vec = match GPR_ALIAS_TABLE.get(&id) {
+            Some(vec) => vec,
+            None => panic!("didnt find {} as GPR", id),
+        };
+
+        match length {
+            64 => vec[0].clone(),
+            32 => vec[1].clone(),
+            16 => vec[2].clone(),
+            8 => vec[3].clone(),
+            1 => vec[3].clone(),
+            _ => panic!("unexpected length {} for {}", length, vec[0]),
+        }
+    } else {
+        for r in ALL_FPRS.iter() {
+            if r.any_reg_id() == id {
+                return r.clone();
+            }
+        }
+
+        panic!("didnt find {} as FPR", id)
     }
 }
